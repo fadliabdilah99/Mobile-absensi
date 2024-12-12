@@ -1,50 +1,72 @@
 import 'dart:io';
-import 'dart:typed_data'; // Import untuk Uint8List
-import 'package:absensi_apps/config/app_asset.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';  // Untuk membaca file dari assets
+import 'package:location/location.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
-import 'package:http_parser/http_parser.dart'; // Import MediaType
 
 void main() {
-  runApp(AbsensiApp());
+  runApp(const AbsensiApp());
 }
 
 class AbsensiApp extends StatelessWidget {
+  const AbsensiApp({Key? key}) : super(key: key);
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      home: AbsensiScreen(),
+      debugShowCheckedModeBanner: false,
+      home: const AbsensiScreen(),
     );
   }
 }
 
 class AbsensiScreen extends StatefulWidget {
+  const AbsensiScreen({Key? key}) : super(key: key);
+
   @override
-  _AbsensiScreenState createState() => _AbsensiScreenState();
+  State<AbsensiScreen> createState() => _AbsensiScreenState();
 }
 
 class _AbsensiScreenState extends State<AbsensiScreen> {
+  LocationData? _locationData;
   File? _foto;
   bool _isLoading = false;
-  Uint8List? _fotoBytes;
 
-  // Mengambil foto dari assets
-  Future<void> _getFotoFromAssets() async {
-    final ByteData bytes = await rootBundle.load(AppAsset.logo);
-    final Uint8List imageBytes = bytes.buffer.asUint8List();  // Mengubah menjadi Uint8List
-    
+  /// Mengambil lokasi pengguna
+  Future<void> _getLocation() async {
+    final location = Location();
+
+    if (!await location.serviceEnabled() && !await location.requestService()) {
+      return;
+    }
+
+    if (await location.hasPermission() == PermissionStatus.denied &&
+        await location.requestPermission() != PermissionStatus.granted) {
+      return;
+    }
+
+    final locationData = await location.getLocation();
     setState(() {
-      _fotoBytes = imageBytes; // Menyimpan gambar sebagai byte array
+      _locationData = locationData;
     });
   }
 
-  // Mengirim data absensi ke API
+  /// Mengambil foto menggunakan kamera
+  Future<void> _getPhoto() async {
+    final pickedFile =
+        await ImagePicker().pickImage(source: ImageSource.camera);
+
+    if (pickedFile != null) {
+      setState(() {
+        _foto = File(pickedFile.path);
+      });
+    }
+  }
+
+  /// Mengirim data absensi ke API
   Future<void> _submitAbsensi() async {
-    if (_fotoBytes == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Pastikan foto sudah diambil!')),
-      );
+    if (_locationData == null || _foto == null) {
+      _showSnackBar('Pastikan lokasi dan foto sudah diambil!');
       return;
     }
 
@@ -52,47 +74,25 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
       _isLoading = true;
     });
 
-
-
-
-
-
-
     try {
-      var request = http.MultipartRequest(
+      final request = http.MultipartRequest(
         'POST',
-        Uri.parse('https://1462-36-69-143-50.ngrok-free.app/api/absensi'), // Ganti dengan URL API Laravel Anda
-      );
+        Uri.parse('https://1462-36-69-143-50.ngrok-free.app/api/absensi'), // Sesuaikan URL API Anda
+      )
+        ..fields['user_id'] = '1' // Ganti sesuai user ID dari sistem Anda
+        ..fields['latitude'] = _locationData!.latitude.toString()
+        ..fields['longitude'] = _locationData!.longitude.toString()
+        ..files.add(await http.MultipartFile.fromPath('foto', _foto!.path));
 
-      // Isi data absensi
-      request.fields['user_id'] = '1'; // Ganti dengan ID user yang valid
-      request.fields['latitude'] = '-6.200000'; // Data dummy latitude
-      request.fields['longitude'] = '106.816666'; // Data dummy longitude
-
-      // Kirim foto dari assets
-      request.files.add(http.MultipartFile.fromBytes(
-        'foto',
-        _fotoBytes!,
-        filename: AppAsset.logo, // Nama file saat dikirim
-        contentType: MediaType('image', 'jpeg'), // Menentukan tipe media
-      ));
-
-      var response = await request.send();
+      final response = await request.send();
 
       if (response.statusCode == 200) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Absensi berhasil!')),
-        );
+        _showSnackBar('Absensi berhasil!');
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Gagal melakukan absensi!')),
-        );
+        _showSnackBar('Gagal melakukan absensi!');
       }
     } catch (e) {
-      print('Error: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Terjadi kesalahan!')),
-      );
+      _showSnackBar('Terjadi kesalahan!');
     }
 
     setState(() {
@@ -100,36 +100,52 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
     });
   }
 
+  /// Menampilkan pesan snack bar
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Absensi Masuk'),
+        title: const Text('Absensi Masuk'),
       ),
       body: Padding(
-        padding: EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(16.0),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Jika foto sudah diambil, tampilkan dengan Image.memory (untuk Web)
-            if (_fotoBytes != null)
-              Image.memory(
-                _fotoBytes!,
+            if (_locationData != null)
+              Text(
+                'Lokasi: ${_locationData!.latitude}, ${_locationData!.longitude}',
+                textAlign: TextAlign.center,
+              ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _getLocation,
+              child: const Text('Ambil Lokasi'),
+            ),
+            const SizedBox(height: 20),
+            if (_foto != null)
+              Image.file(
+                _foto!,
                 height: 200,
                 width: 200,
                 fit: BoxFit.cover,
               ),
-            SizedBox(height: 20),
             ElevatedButton(
-              onPressed: _getFotoFromAssets, // Ambil foto dari assets
-              child: Text('Ambil Foto (Dari Assets)'),
+              onPressed: _getPhoto,
+              child: const Text('Ambil Foto'),
             ),
-            SizedBox(height: 20),
+            const SizedBox(height: 20),
             _isLoading
-                ? CircularProgressIndicator()
+                ? const CircularProgressIndicator()
                 : ElevatedButton(
                     onPressed: _submitAbsensi,
-                    child: Text('Kirim Absensi'),
+                    child: const Text('Kirim Absensi'),
                   ),
           ],
         ),
